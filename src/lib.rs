@@ -40,6 +40,10 @@ impl ProgressBar {
             return Err(ProgressBarError::InvalidDefinition(range));
         }
 
+        if val > range.1 || val < range.0 {
+            return Err(ProgressBarError::OutOfRange{range, current: val});
+        }
+
         let pb = ProgressBar{
             style,
 
@@ -53,10 +57,13 @@ impl ProgressBar {
         let mpb = pb.clone();
 
         thread::spawn(move || {
-            let terminal_width = termize::dimensions_stdout().expect("failed to get terminal size").0;
-            let pb_width = terminal_width - " 100% [] ".len() - mpb.taskname.len();
-
             loop {
+                let terminal_width = termize::dimensions_stdout().expect("failed to get terminal size").0;
+
+                let mut pb_width = terminal_width - " 100% [] ".len() - mpb.taskname.len();
+                if pb_width < 30 {
+                    pb_width = 30;
+                }
 
                 let mut str = String::new();
                 let current_value = rrx.recv().expect("failed to get value") as usize;
@@ -66,13 +73,22 @@ impl ProgressBar {
 
                 let filled = (progress_ratio * pb_width as f64).round() as usize;
 
-                str.push_str(&"=".repeat(filled));
-                str.push_str(&"-".repeat(pb_width - filled));
-
                 match mpb.style {
                     BarStyle::SimpleBar => {
+                        str.push_str(&"#".repeat(filled));
+                        str.push_str(&" ".repeat(pb_width - filled));
+
+                            print!("{} [{}] {:3}% \r", mpb.taskname, str, ((current_value as f64 / (pb.value_range.1 as f64 - 1f64)) * 100f64) as i32);
+                    }
+
+                    BarStyle::Bar => {
+                        (str).push_str(&"=".repeat(filled - 1));
+                        str.push(if pb_width - filled > 0 { '>' } else { '=' } );
+                        str.push_str(&"-".repeat(pb_width - filled));
+
                         print!("{} [{}] {:3}% \r", mpb.taskname, str, ((current_value as f64 / (pb.value_range.1 as f64 - 1f64)) * 100f64) as i32);
                     }
+
                     _ => {}
                 }
 
@@ -88,9 +104,16 @@ impl ProgressBar {
         Ok(pb)
     }
 
-    pub fn set_val(&mut self, val: i32) {
+    pub fn set_val(&mut self, val: i32) -> Result<(), ProgressBarError> {
+
+        if val > self.value_range.1 || val < self.value_range.0 {
+            return Err(ProgressBarError::OutOfRange{range: self.value_range, current: val });
+        }
+
         self.tx.send(self.current_value).expect("receiving between threads failed");
         self.current_value = val;
+
+        Ok(())
     }
 
     pub fn get_val(&self) -> i32 {
